@@ -22,7 +22,7 @@ class TcpLuServer:
             server_socket.bind((self.host, self.port))
             server_socket.listen()
 
-            logging.info("LU TCP server listening on %s:%s", self.host, self.port)
+            logging.info("Сервер запущен на %s:%s", self.host, self.port)
 
             while True:
                 client_socket, address = server_socket.accept()
@@ -36,49 +36,42 @@ class TcpLuServer:
     def _handle_client(self, client_socket: socket.socket, address: tuple[str, int]) -> None:
         with client_socket:
             client_socket.settimeout(CLIENT_TIMEOUT_SECONDS)
-            logging.info("Client connected: %s:%s", address[0], address[1])
+            logging.info("Клиент подключился: %s:%s", address[0], address[1])
 
             try:
-                self._handle_request(client_socket)
+                self._handle_request(client_socket, address)
             except socket.timeout:
-                logging.warning(
-                    "Client %s:%s did not send a complete request within %s seconds",
-                    address[0],
-                    address[1],
-                    CLIENT_TIMEOUT_SECONDS,
-                )
+                logging.warning("Таймаут запроса от клиента %s:%s", address[0], address[1])
                 timeout_response = {
                     "status": "error",
                     "error_code": "REQUEST_TIMEOUT",
-                    "message": "Request timeout",
+                    "message": "Таймаут запроса",
                 }
                 self._send_error_response(client_socket, timeout_response)
             except OSError:
-                logging.exception("Socket error while handling client")
+                logging.error("Ошибка сокета при обработке клиента %s:%s", address[0], address[1])
             except Exception:
-                logging.exception("Unexpected error while handling client")
+                logging.error("Внутренняя ошибка при обработке клиента %s:%s", address[0], address[1])
                 fallback = {
                     "status": "error",
                     "error_code": "INTERNAL_ERROR",
                     "message": "Internal server error",
                 }
                 self._send_error_response(client_socket, fallback)
-            finally:
-                logging.info("Client disconnected: %s:%s", address[0], address[1])
 
-    def _handle_request(self, client_socket: socket.socket) -> None:
+    def _handle_request(self, client_socket: socket.socket, address: tuple[str, int]) -> None:
         raw_request = self._read_request(client_socket)
+        if not raw_request:
+            logging.warning("Пустой запрос от клиента %s:%s", address[0], address[1])
+
         response = handle_request(raw_request)
-        client_socket.sendall(dumps_response(response).encode("utf-8"))
+        encoded_response = dumps_response(response).encode("utf-8")
+        client_socket.sendall(encoded_response)
 
         if response.get("status") == "ok":
-            logging.info("Request processed successfully")
+            logging.info("Запрос обработан: клиент=%s:%s", address[0], address[1])
         else:
-            logging.warning(
-                "Request processing failed: %s %s",
-                response.get("error_code"),
-                response.get("message"),
-            )
+            logging.warning("Ошибка запроса от клиента %s:%s: %s", address[0], address[1], response.get("error_code"))
 
     def _send_error_response(
         self,
@@ -88,7 +81,7 @@ class TcpLuServer:
         try:
             client_socket.sendall(dumps_response(response).encode("utf-8"))
         except OSError:
-            logging.exception("Could not send error response to client")
+            logging.error("Не удалось отправить клиенту ответ об ошибке")
 
     def _read_request(self, client_socket: socket.socket) -> str:
         chunks: list[bytes] = []
